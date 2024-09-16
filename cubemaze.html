@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>立体キューブ迷路</title>
+<script type="importmap">
+    {
+        "imports" : {
+            "three" : "https://unpkg.com/three@0.160.1/build/three.module.js",
+            "three/addons/" : "https://unpkg.com/three@0.160.1/examples/jsm/"
+        }
+    }
+</script>
+<script type="module">                              //モジュールを使用する
+let scene, camera, renderer, light;                 //シーン、カメラ、レンダラー、ライト
+let map, status = "ready", cnt = 0;                 //マップ、ステータス、カウンタ
+let pos, fd, rt, goal;                              //現在位置、前方、右手、ゴール
+const [numX, numY, numZ] = [11, 11, 11]             //マップサイズ
+//three.jsと関連ファイルをインポート
+import * as THREE from "three";
+import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
+
+window.onload = () => {
+    //シーン、カメラ、レンダラーの作成
+    const [width, height] = [800, 600];
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(60, width/height, 0.1, 50);        //透視投影カメラを作成
+    renderer = new THREE.WebGLRenderer({antialias: true});                  //レンダラーを作成
+    renderer.setSize(width, height);
+    document.getElementById("renderArea").appendChild(renderer.domElement); //描画エリアに追加
+    //イベントの登録
+    document.addEventListener("keydown", event => {                         //キーボードのキーを押したとき
+        if (status == "ready") {
+            //向きを変更
+            if (event.key == "ArrowUp") status = "up";                      //カーソルキーの上、下、左、右ならstatusにセット
+            if (event.key == "ArrowDown") status = "down";
+            if (event.key == "ArrowLeft") status = "left";
+            if (event.key == "ArrowRight") status = "right";
+            //前進／後進
+            if ((event.key == "x")&&                                        //「x」キーかつ進み先が通り道なら
+                (map[pos.x+fd.x][pos.y+fd.y][pos.z+fd.z] == 0)) {
+                status = "forward";
+            } else if ((event.key == "z")&&                                 //「z」キーかつ戻り先が通り道なら
+                (map[pos.x-fd.x][pos.y-fd.y][pos.z-fd.z] == 0)) {
+                    status = "backward";
+                }
+            }
+        });
+        document.getElementById("startButton").onclick = initPos;           //「スタート地点に戻る」ボタンを押したとき
+        //迷路、ゴール、ライト（点光源）の作成
+        createMaze();                                                       //迷路を作成
+        const blocks = new Array();
+        for (let x=0; x<numX; x++) {                                        //マップサイズ（11x11x11）ぶんくり返し
+            for (let y=0; y<numY; y++) {
+                for (let z=0; z<numZ; z++) {
+                    if (map[x][y][z] == 1) {                                //マスが壁なら、1辺1.95の立方体を作成
+                        const box = new THREE.BoxGeometry(1.95, 1.95, 1.95);
+                        box.translate(x*2, y*2, z*2);                       //立方体の位置をセット（移動）
+                        blocks.push(box);                                   //配列blocksに保存
+                    }
+                }
+            }
+        }
+        const geometry = BufferGeometryUtils.mergeGeometries(blocks);       //立方体を一つの形状として結合
+        const material = new THREE.MeshPhongMaterial({color:"#6699FF"});    //迷路の色　濃い水色
+        const mesh = new THREE.Mesh(geometry, material);
+        const goalGeometry = new THREE.SphereGeometry(0.3, 32, 32);         //ゴールは半径0.3、分割数32の球
+        const goalMaterial = new THREE.MeshNormalMaterial({wireframe:true});    //球はワイヤーフレームで描画
+        goal = new THREE.Mesh(goalGeometry, goalMaterial);
+        goal.position.set((numX-3)*2, (numY-3)*2, (numZ-3)*2);
+        const goalLight = new THREE.PointLight("#FFFFFF", 6);               //白色、強さ６の点光源を作成
+        goalLight.position.set((numX-3)*2, (numY-3)*2, (numZ-3)*2);         //ゴールの中心に置く
+        light = new THREE.PointLight("#FFFFFF", 5, 0, 1);                   //白色、強さ５、減衰率１の点光源を作成
+        scene.add(mesh, goal, goalLight, light);
+        initPos();
+        update();
+}
+
+const createMaze = () => {
+    //迷路を作成
+    map = new Array(numX);                                                  //11x11x11の3次元配列を作成
+    for (let x=0; x<numX; x++) {
+        map[x] = new Array(numY);
+        for (let y=0; y<numY; y++) {
+            map[x][y] = new Array(numZ);
+            for (let z=0; z<numZ; z++) {
+                if ((x == 0) || (x == numX-1) || (y == 0) || (y == numY-1)  //外周のマスなら 
+                  || (z == 0) || (z == numZ-1)) {
+                  map[x][y][z] = -1;                                        //値をー１（外周壁）に
+                  } else {                                                  //外周以外なら値を1（壁）に
+                    map[x][y][z] = 1;
+                  }
+            }
+        }
+    }
+    dig(numX-3, numY-3, numZ-3);                                            //ゴール地点（8,8,8)から穴掘り法で迷路を作成
+}
+
+const dig = (x, y, z) => {                                                  //(x,y,z)：現在のマスの位置
+    //穴掘り法
+    map[x][y][z] = 0;                                                       //現在の位置の値を０（穴＝通り道）にする
+    const dir = [[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,-1],[0,0,1]];       //左右上下前後の方向
+    const order = [0,1,2,3,4,5];                                            //左右上下前後のインデックス
+    for (let i=order.length-1; i>=0; i--) {                                 //方向のインデックスをシャッフルする
+        const j = Math.floor(Math.random()*i);
+        [order[i], order[j]] = [order[j], order[i]];
+    }
+    for (let i=0; i<order.length; i++) {
+        const [dx, dy, dz] = dir[order[i]];                                 //方向を取り出す
+        const [tx1, ty1, tz1] = [x+dx, y+dy, z+dz];                         //1歩進んだマスの位置
+        const [tx2, ty2, tz2] = [x+dx*2, y+dy*2, z+dz*2];                   //2歩進んだマスの位置
+        if ((map[tx1][ty1][tz1] == 1)&&(map[tx2][ty2][tz2] == 1)) {         //1歩先も2歩先も壁なら
+            map[tx1][ty1][tz1] = 0;                                         //1歩先の値を0（穴＝通り道）にする
+            dig(tx2, ty2, tz2);                                             //2歩先を現在位置として、digを再帰呼び出し
+        }
+    }
+}
+
+const initPos = () => {
+    //スタート地点
+    pos = new THREE.Vector3(2,2,2);                                         //スタート地点は(2,2,2)
+    fd = new THREE.Vector3(1,0,0);                                          //プレイヤーの進行方向、右方向、上方向を表すベクトルの初期値
+    rt = new THREE.Vector3(0,0,1);
+    camera.up = new THREE.Vector3(0,1,0);
+    document.getElementById("pos").innerText = `${pos.x},${pos.y},${pos.z}`;    //現在位置に座標を表示
+    document.getElementById("message").innerText = "";                      //メッセージをクリア
+}
+
+const setInteger = v => {
+    //ベクトルの要素を整数に変換
+    [v.x,v.y,v.z] = [Math.round(v.x), Math.round(v.y), Math.round(v.z)];    //小数点以下を四捨五入
+}
+
+const update = () => {
+    //カメラ、ライトの移動
+    if ((status == "right") || (status == "left")) {                        //左右回転のとき
+        let angle = Math.PI/40;                                             //回転角度は、右なら4.5度、左ならｰ4.5度
+        if (status == "right") angle *= -1;
+        fd.applyAxisAngle(camera.up, angle);                                //進行方向と右方向を、上方向を軸にangleだけ回転
+        rt.applyAxisAngle(camera.up, angle);
+    }
+    if ((status == "up") || (status == "down")) {                           //上下回転のとき
+        let angle = Math.PI/40;                                             //回転角度は、上なら4.5度、下なら―4.5度
+        if (status == "down") angle *= -1;
+        fd.applyAxisAngle(rt, angle);                                       //進行方向と上方向を、右方向を軸にangleだけ回転
+        camera.up.applyAxisAngle(rt, angle);
+    }
+    if (status == "forward") pos.addScaledVector(fd, 1/20);                 //前移動なら進行方向に20分の1マス進む
+    if (status == "backward") pos.addScaledVector(fd, -1/20);               //後ろ移動なら、進行方向にﾏｲﾅｽ20分の1マス戻る
+    if (status != "ready") cnt++;                                           //回転もしくは移動を20回繰り返す
+    if (cnt == 20) {
+        [status, cnt] = ["ready", 0];
+        setInteger(pos);                                                    //位置と進行方向ベクトルを整数に変換
+        setInteger(fd);
+        document.getElementById("pos").innerText = `${pos.x}, ${pos.y}, ${pos.z}`;
+        if (pos.equals(new THREE.Vector3((numX-3), (numY-3), (numZ-3)))) {  //ゴールに着いたらメッセージに「GOAL!!」と表示
+            document.getElementById("message").innerText = "GOAL!!";
+        }
+    }
+    camera.position.set(pos.x*2-fd.x, pos.y*2-fd.y, pos.z*2-fd.z);          //カメラを現在のマスの中心から半歩手前に移動
+    camera.lookAt((pos.x+fd.x)*2, (pos.y+fd.y)*2, (pos.z+fd.z)*2);
+    light.position.set(pos.x*2-fd.x, pos.y*2-fd.y, pos.z*2-fd.z);           //点光源をカメラと同じ位置に移動
+    goal.rotation.y += Math.PI/60;                                          //ゴールの球をy軸で3度ずつ回転
+    //描画
+    renderer.render(scene, camera);                                         //3D描画
+    window.requestAnimationFrame(update);
+}
+</script>
+</head>
+<body>
+<p>立体キューブ迷路</p>
+<input type="button" id="startButton" value="スタート地点に戻る">
+現在位置：(<span id="pos"></span>) <span id="message"></span>
+<hr>
+<div id="renderArea"></div>
+回転：[↑][↓][←][→]　前進：[x]　後進：[z]
+</body>
+</html>
